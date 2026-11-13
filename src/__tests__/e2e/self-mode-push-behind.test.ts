@@ -680,4 +680,35 @@ describe('self-mode push from a checkout behind the default branch', () => {
       expect(git(['show', `${branch}:.teamai/agents/ops/sample.yaml`], remote)).toContain('Converted instructions.');
     }
   });
+
+  it('merges a self-mode teamai.yaml edit onto a teammate\'s newer setting on the default branch (#1835)', async () => {
+    expect((await runCLI(['pull'], projectRoot, home)).code).toBe(0);
+    const baseYaml = fs.readFileSync(active('.teamai/teamai.yaml'), 'utf8');
+    teammateLandsOnMain({ '.teamai/teamai.yaml': `${baseYaml}autoUpdate: false\n` });
+    git(['fetch', '-q', 'origin'], projectRoot);
+    fs.writeFileSync(active('.teamai/teamai.yaml'), `${baseYaml}submodules: false\n`);
+
+    const push = await runCLI(['push', '--all'], projectRoot, home);
+
+    expect(push.code, push.output).toBe(1);
+    expect(push.output).toContain('Pushed branch');
+    const [branch] = pushBranches();
+    const pushedYaml = git(['show', `${branch}:.teamai/teamai.yaml`], remote);
+    expect(pushedYaml).toContain('autoUpdate: false');
+    expect(pushedYaml).toContain('submodules: false');
+  });
+
+  it('refuses a self-mode push when the member and a teammate changed the same teamai.yaml key differently (#1835)', async () => {
+    expect((await runCLI(['pull'], projectRoot, home)).code).toBe(0);
+    const baseYaml = fs.readFileSync(active('.teamai/teamai.yaml'), 'utf8');
+    teammateLandsOnMain({ '.teamai/teamai.yaml': `${baseYaml}autoUpdate: false\n` });
+    git(['fetch', '-q', 'origin'], projectRoot);
+    fs.writeFileSync(active('.teamai/teamai.yaml'), `${baseYaml}autoUpdate: true\n`);
+
+    const push = await runCLI(['push', '--all'], projectRoot, home);
+
+    expect(push.code, push.output).toBe(1);
+    expect(push.output).toContain('Conflicting keys: autoUpdate.');
+    expect(pushBranches()).toEqual([]);
+  });
 });

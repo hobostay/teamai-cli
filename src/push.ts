@@ -1348,11 +1348,16 @@ export async function push(
       try {
         const pendingTeamConfig = await pendingSelfTeamConfig(localConfig);
         await withKnowledgeWorktree(localConfig, async (wtConfig) => {
-          if (pendingTeamConfig !== null) {
-            await writeFile(path.join(wtConfig.repo.localPath, 'teamai.yaml'), pendingTeamConfig);
+          let carriedConfig = pendingTeamConfig;
+
+          if (carriedConfig !== null) {
+            const target = path.join(wtConfig.repo.localPath, 'teamai.yaml');
+            // The member edited the config committed at their HEAD; the worktree holds the default branch's.
+            carriedConfig = mergeTeamConfig(await committedSelfTeamConfig(localConfig), carriedConfig, await readFileSafe(target));
+            await writeFile(target, carriedConfig);
           }
 
-          await pushCore(wtConfig, teamConfig, options, pendingTeamConfig, result);
+          await pushCore(wtConfig, teamConfig, options, carriedConfig, result);
         });
       } catch (e) {
         if (e instanceof EmptyRepoError) {
@@ -1401,16 +1406,24 @@ export async function push(
  * worktree alone. Read-only, which is why the `--dry-run` path calls it too
  * (#866); writing it into the worktree stays with the real path.
  */
-async function pendingSelfTeamConfig(localConfig: LocalConfig): Promise<string | null> {
+async function committedSelfTeamConfig(localConfig: LocalConfig): Promise<string | null> {
   const activeConfigPath = path.join(localConfig.repo.localPath, 'teamai.yaml');
-  const activeConfig = await readFileSafe(activeConfigPath);
   const businessRoot = localConfig.repo.businessRepoRoot ?? localConfig.projectRoot;
 
-  if (activeConfig === null || !businessRoot) return null;
+  if (!businessRoot) return null;
   const relativeConfigPath = path.relative(businessRoot, activeConfigPath).split(path.sep).join('/');
   const committed = await getFileContentAtRev(businessRoot, 'HEAD', relativeConfigPath);
 
-  return committed === null || committed.toString().replace(/\r\n/g, '\n') !== activeConfig.replace(/\r\n/g, '\n') ? activeConfig : null;
+  return committed?.toString() ?? null;
+}
+
+async function pendingSelfTeamConfig(localConfig: LocalConfig): Promise<string | null> {
+  const activeConfig = await readFileSafe(path.join(localConfig.repo.localPath, 'teamai.yaml'));
+
+  if (activeConfig === null) return null;
+  const committed = await committedSelfTeamConfig(localConfig);
+
+  return committed === null || committed.replace(/\r\n/g, '\n') !== activeConfig.replace(/\r\n/g, '\n') ? activeConfig : null;
 }
 
 /**
